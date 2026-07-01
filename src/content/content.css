@@ -1,0 +1,8 @@
+/* Minimal reset for the GYFTR widget container only */
+#gyftr-widget-root {
+  all: initial;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+#gyftr-widget-root * {
+  box-sizing: border-box;
+}
