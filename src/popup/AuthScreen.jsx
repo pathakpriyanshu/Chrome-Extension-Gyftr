@@ -5,11 +5,11 @@ import { Spinner } from './Popup'
 const ORANGE = '#FF6B35'
 const DARK = '#1A1A2E'
 
-export default function AuthScreen({ brand }) {
+export default function AuthScreen({ brand, onAuthed }) {
   const [mode, setMode] = useState('login') // 'login' | 'signup'
   const [name, setName] = useState('')
   const [mobile, setMobile] = useState('')
-  const [status, setStatus] = useState('idle') // idle | loading | error | success
+  const [status, setStatus] = useState('idle') // idle | loading | error
   const [error, setError] = useState('')
 
   const submit = async () => {
@@ -17,42 +17,11 @@ export default function AuthScreen({ brand }) {
     setError('')
     const res = await mockAuth({ mode, mobile })
     if (res.ok) {
-      setStatus('success')
+      onAuthed(res.mode) // hand off to the wallet
     } else {
       setError(res.error)
       setStatus('error')
     }
-  }
-
-  if (status === 'success') {
-    return (
-      <div style={{ padding: '34px 22px', textAlign: 'center' }} className="gyftr-fade-up">
-        <div className="gyftr-pop" style={{ fontSize: 54, marginBottom: 10 }}>
-          ✅
-        </div>
-        <h2 style={{ fontSize: 18, color: DARK, margin: '0 0 6px' }}>
-          You're all set!
-        </h2>
-        <p style={{ fontSize: 13, color: '#777', lineHeight: 1.55, margin: '0 0 22px' }}>
-          {mode === 'signup' ? 'Account created. ' : 'Signed in. '}
-          Head back to your {brand.emoji} {brand.name} cart — your voucher is ready
-          to apply at the coupon field.
-        </p>
-        <div
-          style={{
-            background: '#fff9f7',
-            border: `1.5px dashed ${ORANGE}`,
-            borderRadius: 12,
-            padding: '12px 14px',
-            fontSize: 12,
-            color: '#666',
-          }}
-        >
-          💡 Tip: the floating GYFTR pill on the checkout page will auto-fill the
-          code for you.
-        </div>
-      </div>
-    )
   }
 
   const isSignup = mode === 'signup'

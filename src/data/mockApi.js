@@ -36,11 +36,19 @@ export async function fetchBestOffers(brandId) {
   return { vouchers }
 }
 
-/** Step 3 — calculate the maximum the user can save on this order. */
+/** Step 3 — calculate the price you'd pay via GYFTR and how much you save. */
 export async function calculateSavings(brandId) {
   await delay(1100)
   const offer = BRAND_OFFER[brandId] ?? { orderValue: 0, savings: 0 }
-  return offer
+  const percent = offer.orderValue
+    ? Math.round((offer.savings / offer.orderValue) * 100)
+    : 0
+  return {
+    orderValue: offer.orderValue,
+    savings: offer.savings,
+    gyftrPrice: offer.orderValue - offer.savings,
+    percent,
+  }
 }
 
 /** Mock auth — pretends to send an OTP / create an account. */
@@ -49,5 +57,28 @@ export async function mockAuth({ mode, mobile }) {
   if (!/^\d{10}$/.test(mobile ?? '')) {
     return { ok: false, error: 'Enter a valid 10-digit mobile number' }
   }
+  await chrome.storage.local.set({ gyftr_logged_in: true, gyftr_mode: mode })
   return { ok: true, mode }
+}
+
+/** Is the user already signed into their GYFTR account? */
+export async function getLoginState() {
+  const { gyftr_logged_in, gyftr_mode } = await chrome.storage.local.get([
+    'gyftr_logged_in',
+    'gyftr_mode',
+  ])
+  return { loggedIn: Boolean(gyftr_logged_in), mode: gyftr_mode ?? 'login' }
+}
+
+export async function logout() {
+  await chrome.storage.local.remove(['gyftr_logged_in', 'gyftr_mode'])
+}
+
+/**
+ * Saved GYFTR gift-card vouchers already in the user's account for this brand.
+ * New sign-ups start empty (they'll buy one); returning users have one saved.
+ */
+export function getAccountVouchers(brandId, mode) {
+  if (mode === 'signup') return []
+  return getVouchersForBrand(brandId).slice(0, 1)
 }

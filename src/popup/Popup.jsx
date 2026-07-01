@@ -5,8 +5,10 @@ import {
   checkBrandEligibility,
   fetchBestOffers,
   calculateSavings,
+  getLoginState,
 } from '../data/mockApi'
 import AuthScreen from './AuthScreen'
+import WalletScreen from './WalletScreen'
 
 const ORANGE = '#FF6B35'
 const DARK = '#1A1A2E'
@@ -16,14 +18,22 @@ export default function Popup() {
   const [brand, setBrand] = useState(null)
   const [ready, setReady] = useState(false)
 
-  // Flow: intro → analyzing → result → auth
+  // Flow: intro → analyzing → result → account
   const [phase, setPhase] = useState('intro')
+  const [offer, setOffer] = useState(null) // { orderValue, savings, gyftrPrice, percent }
+
+  // Account
+  const [loggedIn, setLoggedIn] = useState(false)
+  const [authMode, setAuthMode] = useState('login') // 'login' | 'signup'
 
   useEffect(() => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
       const url = tabs[0]?.url ?? ''
       setTabUrl(url)
-      setBrand(detectBrand(url)) // detect locally — no background round-trip
+      setBrand(detectBrand(url))
+      const { loggedIn, mode } = await getLoginState()
+      setLoggedIn(loggedIn)
+      setAuthMode(mode)
       setReady(true)
     })
   }, [])
@@ -39,7 +49,6 @@ export default function Popup() {
     )
   }
 
-  // Not on a supported checkout page → show the browse/list fallback.
   if (!brand) {
     return (
       <Shell brand={null}>
@@ -57,13 +66,36 @@ export default function Popup() {
         <AnalyzingScreen
           brand={brand}
           tabUrl={tabUrl}
-          onDone={() => setPhase('result')}
+          onDone={(computedOffer) => {
+            setOffer(computedOffer)
+            setPhase('result')
+          }}
         />
       )}
       {phase === 'result' && (
-        <ResultScreen brand={brand} onUseVoucher={() => setPhase('auth')} />
+        <ResultScreen
+          brand={brand}
+          offer={offer}
+          onUseVoucher={() => setPhase('account')}
+        />
       )}
-      {phase === 'auth' && <AuthScreen brand={brand} />}
+      {phase === 'account' &&
+        (loggedIn ? (
+          <WalletScreen
+            brand={brand}
+            offer={offer}
+            mode={authMode}
+            onLogout={() => setLoggedIn(false)}
+          />
+        ) : (
+          <AuthScreen
+            brand={brand}
+            onAuthed={(mode) => {
+              setAuthMode(mode)
+              setLoggedIn(true)
+            }}
+          />
+        ))}
     </Shell>
   )
 }
@@ -118,13 +150,7 @@ function Shell({ brand, children }) {
             You're on <strong>{brand.name}</strong> — let's find your savings
           </div>
         ) : (
-          <div
-            style={{
-              fontSize: 13,
-              color: 'rgba(255,255,255,0.85)',
-              marginTop: 8,
-            }}
-          >
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 8 }}>
             Open a supported store's checkout to unlock savings
           </div>
         )}
@@ -144,28 +170,10 @@ function IntroScreen({ brand, onStart }) {
         Shopping on {brand.name}?
       </h2>
       <p style={{ fontSize: 13, color: '#777', lineHeight: 1.55, margin: '0 0 24px' }}>
-        GYFTR can check this order for gift-card vouchers and instant cashback —
-        find out how much you could keep in your pocket.
+        Pay for this order through GYFTR and get it for less. Let's check exactly
+        how much you could save right now.
       </p>
-      <button
-        onClick={onStart}
-        style={{
-          width: '100%',
-          background: ORANGE,
-          color: '#fff',
-          border: 'none',
-          borderRadius: 12,
-          padding: '15px',
-          fontSize: 15,
-          fontWeight: 800,
-          cursor: 'pointer',
-          boxShadow: '0 6px 18px rgba(255,107,53,0.35)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 8,
-        }}
-      >
+      <button onClick={onStart} style={primaryBtn}>
         💰 How much can I save on this?
       </button>
       <p style={{ fontSize: 11, color: '#aaa', marginTop: 14 }}>
@@ -184,44 +192,35 @@ const STEPS = [
   },
   {
     pending: 'Verifying the best offers for you…',
-    done: () => 'Hold tight — locking in the top voucher ✨',
+    done: () => 'Hold tight — finding you the biggest saving ✨',
   },
   {
-    pending: 'Calculating your maximum savings…',
+    pending: 'Calculating your GYFTR price…',
     done: () => 'Savings unlocked! 🔓',
   },
 ]
 
 function AnalyzingScreen({ brand, tabUrl, onDone }) {
-  // stepIndex = the step currently in progress. Steps before it are "done".
   const [stepIndex, setStepIndex] = useState(0)
 
   useEffect(() => {
     let cancelled = false
 
     async function run() {
-      // Step 1 — eligibility
       const elig = await checkBrandEligibility(tabUrl)
       if (cancelled) return
-      if (!elig.eligible) {
-        onDone() // shouldn't happen (brand already detected), but be safe
-        return
-      }
       setStepIndex(1)
 
-      // Step 2 — offers
       await fetchBestOffers(brand.id)
       if (cancelled) return
       setStepIndex(2)
 
-      // Step 3 — savings
-      await calculateSavings(brand.id)
+      const computedOffer = await calculateSavings(brand.id)
       if (cancelled) return
       setStepIndex(3)
 
-      // brief beat on the final tick before revealing the result
       await new Promise((r) => setTimeout(r, 650))
-      if (!cancelled) onDone()
+      if (!cancelled) onDone(computedOffer)
     }
 
     run()
@@ -286,14 +285,7 @@ function StepRow({ state, label }) {
         ) : isActive ? (
           <Spinner size={20} />
         ) : (
-          <div
-            style={{
-              width: 20,
-              height: 20,
-              borderRadius: 999,
-              border: '2px solid #ddd',
-            }}
-          />
+          <div style={{ width: 20, height: 20, borderRadius: 999, border: '2px solid #ddd' }} />
         )}
       </div>
       <span
@@ -311,97 +303,91 @@ function StepRow({ state, label }) {
 
 /* ------------------------------- Result --------------------------------- */
 
-function ResultScreen({ brand, onUseVoucher }) {
-  const vouchers = MOCK_VOUCHERS[brand.id] ?? []
-  // savings figure comes from the mock API's BRAND_OFFER; re-derive for display
-  const savings = SAVINGS_DISPLAY[brand.id] ?? 0
+function ResultScreen({ brand, offer, onUseVoucher }) {
+  const { orderValue, savings, gyftrPrice, percent } = offer
 
   return (
-    <div style={{ padding: '22px 20px' }} className="gyftr-fade-up">
-      <div style={{ textAlign: 'center', marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#888', fontWeight: 600 }}>
-          🎉 Good news! You can save up to
+    <div style={{ padding: '20px 20px' }} className="gyftr-fade-up">
+      {/* Savings hero */}
+      <div style={{ textAlign: 'center', marginBottom: 16 }}>
+        <div style={{ fontSize: 12.5, color: '#888', fontWeight: 600 }}>
+          🎉 Good news! On this order you save
         </div>
         <div
           className="gyftr-pop"
-          style={{
-            fontSize: 46,
-            fontWeight: 900,
-            color: ORANGE,
-            lineHeight: 1.1,
-            margin: '4px 0',
-          }}
+          style={{ fontSize: 46, fontWeight: 900, color: ORANGE, lineHeight: 1.1, margin: '4px 0' }}
         >
           ₹{savings.toLocaleString('en-IN')}
         </div>
-        <div style={{ fontSize: 12.5, color: '#666' }}>
-          on your {brand.emoji} <strong>{brand.name}</strong> order with GYFTR
+        <div
+          style={{
+            display: 'inline-block',
+            background: '#eafaf0',
+            color: '#22a355',
+            fontSize: 12,
+            fontWeight: 700,
+            padding: '3px 10px',
+            borderRadius: 999,
+          }}
+        >
+          {percent}% off with GYFTR
         </div>
       </div>
 
-      {vouchers.map((v) => (
-        <div
-          key={v.code}
-          style={{
-            border: `1.5px dashed ${ORANGE}`,
-            borderRadius: 12,
-            padding: '12px 14px',
-            marginBottom: 12,
-            background: '#fff9f7',
-          }}
-        >
-          <div
-            style={{
-              fontFamily: 'monospace',
-              fontWeight: 800,
-              fontSize: 16,
-              color: ORANGE,
-              letterSpacing: 1,
-            }}
-          >
-            {v.code}
-          </div>
-          <div style={{ fontSize: 12, color: '#666', marginTop: 3 }}>{v.label}</div>
-        </div>
-      ))}
-
-      <button
-        onClick={onUseVoucher}
+      {/* Price breakdown */}
+      <div
         style={{
-          width: '100%',
-          background: ORANGE,
-          color: '#fff',
-          border: 'none',
-          borderRadius: 12,
-          padding: '15px',
-          fontSize: 15,
-          fontWeight: 800,
-          cursor: 'pointer',
-          boxShadow: '0 6px 18px rgba(255,107,53,0.35)',
-          marginTop: 4,
+          background: '#fff',
+          border: '1px solid #eee',
+          borderRadius: 14,
+          padding: '14px 16px',
+          marginBottom: 16,
+          boxShadow: '0 2px 10px rgba(0,0,0,0.04)',
         }}
       >
-        Use Voucher &amp; Save →
+        <Row
+          label="Current cart value"
+          value={`₹${orderValue.toLocaleString('en-IN')}`}
+          valueStyle={{ color: '#999', textDecoration: 'line-through' }}
+        />
+        <Row
+          label={`GYFTR saving (${percent}%)`}
+          value={`− ₹${savings.toLocaleString('en-IN')}`}
+          valueStyle={{ color: '#22a355', fontWeight: 700 }}
+        />
+        <div style={{ height: 1, background: '#f0f0f0', margin: '10px 0' }} />
+        <Row
+          label={<strong style={{ color: DARK }}>Your price via GYFTR</strong>}
+          value={`₹${gyftrPrice.toLocaleString('en-IN')}`}
+          valueStyle={{ color: ORANGE, fontWeight: 900, fontSize: 18 }}
+        />
+      </div>
+
+      <button onClick={onUseVoucher} style={primaryBtn}>
+        Use your GYFTR voucher →
       </button>
-      <p style={{ fontSize: 11, color: '#aaa', textAlign: 'center', marginTop: 12 }}>
-        Sign in to your GYFTR account to apply this at checkout
+      <p style={{ fontSize: 11, color: '#aaa', textAlign: 'center', marginTop: 12, lineHeight: 1.5 }}>
+        Pay for this order through GYFTR gift vouchers to lock in ₹
+        {gyftrPrice.toLocaleString('en-IN')}
       </p>
     </div>
   )
 }
 
-// Mirror of BRAND_OFFER savings in mockApi (kept here for display only).
-const SAVINGS_DISPLAY = {
-  amazon: 500,
-  flipkart: 320,
-  myntra: 1995,
-  nykaa: 210,
-  ajio: 300,
-  makemytrip: 2100,
-  swiggy: 90,
-  zomato: 65,
-  croma: 1800,
-  bigbasket: 180,
+function Row({ label, value, valueStyle }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '4px 0',
+      }}
+    >
+      <span style={{ fontSize: 13, color: '#666' }}>{label}</span>
+      <span style={{ fontSize: 14, ...valueStyle }}>{value}</span>
+    </div>
+  )
 }
 
 /* --------------------------- Browse Fallback ---------------------------- */
@@ -416,7 +402,7 @@ function BrowseFallback() {
     <div>
       <div style={{ display: 'flex', borderBottom: '1px solid #ececec', background: '#fff' }}>
         {[
-          { id: 'vouchers', label: 'My Vouchers' },
+          { id: 'vouchers', label: 'Sample Offers' },
           { id: 'brands', label: 'Supported Brands' },
         ].map((t) => (
           <button
@@ -445,11 +431,11 @@ function BrowseFallback() {
             <div
               key={i}
               style={{
-                border: `1.5px dashed ${ORANGE}`,
+                border: '1px solid #eee',
                 borderRadius: 10,
                 padding: '10px 12px',
                 marginBottom: 10,
-                background: '#fff9f7',
+                background: '#fff',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -457,19 +443,18 @@ function BrowseFallback() {
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#555' }}>
                   {v.brand.name}
                 </span>
+                <span
+                  style={{
+                    marginLeft: 'auto',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: ORANGE,
+                  }}
+                >
+                  Save {v.brand.cashbackPercent}%
+                </span>
               </div>
-              <div
-                style={{
-                  fontFamily: 'monospace',
-                  fontWeight: 700,
-                  fontSize: 15,
-                  color: ORANGE,
-                  letterSpacing: 1,
-                }}
-              >
-                {v.code}
-              </div>
-              <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>{v.label}</div>
+              <div style={{ fontSize: 12, color: '#666' }}>{v.label}</div>
             </div>
           ))
         ) : (
@@ -504,6 +489,23 @@ function BrowseFallback() {
 }
 
 /* ------------------------------ Primitives ------------------------------ */
+
+export const primaryBtn = {
+  width: '100%',
+  background: ORANGE,
+  color: '#fff',
+  border: 'none',
+  borderRadius: 12,
+  padding: '15px',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+  boxShadow: '0 6px 18px rgba(255,107,53,0.35)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+}
 
 export function Spinner({ size = 20 }) {
   return (
